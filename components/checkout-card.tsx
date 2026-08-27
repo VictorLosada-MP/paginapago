@@ -1,6 +1,12 @@
 import { Check, ShieldCheck, Clock, Building2, CreditCard, Bitcoin } from "lucide-react"
 
-const PRECIO = "[PRECIO]"
+import { WompiPayButton } from "@/components/wompi-pay-button"
+import { AMOUNT_IN_CENTS, formatCOP } from "@/lib/wompi"
+
+// El cobro se hace en COP: Wompi Colombia no liquida en USD. El monto vive en
+// `lib/wompi.ts` (en centavos) para que lo que se muestra aquí y lo que se
+// firma en el backend sean siempre el mismo valor.
+const PRECIO = formatCOP(AMOUNT_IN_CENTS)
 
 const incluye = [
   "Sistema a medida construido para tu negocio",
@@ -51,7 +57,7 @@ export function CheckoutCard() {
             <div className="flex items-baseline justify-between gap-4">
               <span className="text-sm text-muted-foreground">Inversión total</span>
               <span className="text-2xl font-semibold tracking-tight text-foreground">
-                {`$${PRECIO} USD`}
+                {PRECIO}
               </span>
             </div>
           </section>
@@ -84,13 +90,8 @@ export function CheckoutCard() {
             </div>
           </section>
 
-          {/* Botón principal */}
-          <button
-            type="button"
-            className="w-full rounded-xl bg-primary px-6 py-4 text-base font-semibold text-primary-foreground shadow-sm transition-colors hover:bg-primary-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-card"
-          >
-            Realizar Pago
-          </button>
+          {/* Botón principal: lo renderiza el Widget oficial de Wompi */}
+          <WompiPayButton amountInCents={AMOUNT_IN_CENTS} />
 
           {/* Nota de confianza */}
           <div className="mt-6 flex items-start gap-3 border-t border-border pt-6">

@@ -7,9 +7,15 @@ __v0_jsx-dev-runtime.ts
 .vercel/
 
 # Environment variables
-.env*.local
+.env
+.env.*
+!.env.example
 
 # Common ignores
 node_modules
 .next/
 .DS_Store
+
+# TypeScript (generados por Next: next-env.d.ts apunta a tipos dentro de .next/)
+next-env.d.ts
+*.tsbuildinfo
