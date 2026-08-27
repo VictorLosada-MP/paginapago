@@ -9,57 +9,113 @@ import { createHash, randomBytes } from 'node:crypto'
  */
 
 /**
- * Wompi Colombia liquida únicamente en pesos colombianos (COP), así que el
- * cobro SIEMPRE se hace en COP aunque el precio se haya comunicado en USD.
+ * Moneda con la que se COBRA.
+ *
+ * El precio se fija y se muestra en USD (ver `PRICE_IN_USD_CENTS`), pero Wompi
+ * Colombia solo liquida en pesos colombianos: el cargo real siempre sale en COP.
  */
 export const CURRENCY = 'COP' as const
 
-/**
- * Monto del cobro en CENTAVOS de peso colombiano.
- *
- * Ejemplo: 250000000 centavos = $2.500.000 COP.
- *
- * Si el precio original de la oferta estaba en USD, hay que convertirlo a COP
- * a la tasa que se quiera fijar y escribir aquí el resultado en centavos:
- * Wompi no acepta USD para comercios colombianos.
- *
- * Se puede sobreescribir con la variable de entorno `WOMPI_AMOUNT_IN_CENTS`
- * para no tener que tocar el código cada vez que cambie el precio.
- */
-export const AMOUNT_IN_CENTS = Number.parseInt(
-  process.env.WOMPI_AMOUNT_IN_CENTS ?? '250000000',
+/** Precio de la oferta en CENTAVOS de dólar. 250000 = US$2,500.00 */
+export const PRICE_IN_USD_CENTS = Number.parseInt(
+  process.env.PRICE_IN_USD_CENTS ?? '250000',
   10,
 )
+
+/**
+ * Pesos colombianos por cada dólar, usada para convertir el precio a COP.
+ *
+ * Es una tasa FIJA a propósito: consultar una API de divisas en cada pago
+ * metería una dependencia externa que puede caerse justo en el checkout, y
+ * haría que el precio bailara entre una visita y otra. Hay que revisarla a mano
+ * cuando la tasa se mueva (variable `USD_TO_COP_RATE`).
+ */
+export const USD_TO_COP_RATE = Number.parseFloat(process.env.USD_TO_COP_RATE ?? '4000')
+
+/**
+ * Monto del cargo en CENTAVOS de peso colombiano.
+ *
+ * centavos_usd / 100 = dólares → dólares * tasa = pesos → pesos * 100 = centavos_cop
+ * que se simplifica a centavos_usd * tasa.
+ */
+export const AMOUNT_IN_CENTS = Math.round(PRICE_IN_USD_CENTS * USD_TO_COP_RATE)
 
 /** Prefijo de la referencia de pago, ej: `VICTOR-20260825-ABC123`. */
 const REFERENCE_PREFIX = process.env.WOMPI_REFERENCE_PREFIX ?? 'VICTOR'
 
-/** Página de Agradecimiento a la que Wompi redirige al terminar el pago. */
-const THANK_YOU_URL =
+/** Página de Agradecimiento. Solo se llega ahí si la transacción quedó APPROVED. */
+export const THANK_YOU_URL =
   process.env.NEXT_PUBLIC_THANK_YOU_URL ?? 'https://pageagradecimiento.vercel.app/'
 
+/**
+ * Métodos de pago que puede elegir el usuario.
+ *
+ * Todos se cobran por Wompi; lo que cambia es qué opciones le muestra el modal
+ * y el texto del botón. Los códigos son los que acepta el widget:
+ * CARD, NEQUI, BANCOLOMBIA_TRANSFER, BANCOLOMBIA_COLLECT, PSE.
+ *
+ * Van como string separado por comas, NO como array: el widget hace
+ * `paymentMethods.split(",")` y con un array revienta con
+ * "e.split is not a function" sin abrir el modal.
+ */
+export const PAYMENT_METHODS = {
+  card: {
+    label: 'Tarjeta de crédito/débito',
+    buttonLabel: 'Pagar con tarjeta',
+    wompiMethods: 'CARD',
+  },
+  bank: {
+    label: 'Transferencia bancaria',
+    buttonLabel: 'Pagar con transferencia bancaria',
+    wompiMethods: 'PSE,BANCOLOMBIA_TRANSFER,BANCOLOMBIA_COLLECT',
+  },
+} as const
+
+export type PaymentMethodId = keyof typeof PAYMENT_METHODS
+
+export function isPaymentMethodId(value: unknown): value is PaymentMethodId {
+  return typeof value === 'string' && value in PAYMENT_METHODS
+}
+
 export type CheckoutSession = {
-  /** Llave PÚBLICA de Wompi (`pub_test_...` en Sandbox, `pub_prod_...` en producción). */
+  /** Llave PÚBLICA de Wompi. Es la única llave que puede ver el navegador. */
   publicKey: string
   currency: typeof CURRENCY
   amountInCents: number
-  /** Referencia única e irrepetible de este pago. */
+  /** Referencia única de este intento de pago. */
   reference: string
   /** Firma de integridad calculada en el backend. */
   signature: string
+  /**
+   * A dónde vuelve Wompi cuando el pago sale de la página (PSE, Bancolombia).
+   * Apunta a nuestra propia pantalla de estado, NO a la de agradecimiento:
+   * ahí se verifica contra la API de Wompi si la transacción quedó aprobada.
+   */
   redirectUrl: string
+  /** Métodos que se le muestran al usuario dentro del modal, separados por comas. */
+  paymentMethods: string
 }
 
-/** Formatea centavos de COP como `$2.500.000 COP`. */
+/** Formatea centavos de COP como `$10.000.000 COP`. */
 export function formatCOP(amountInCents: number): string {
   const pesos = Math.round(amountInCents / 100)
   return `$${new Intl.NumberFormat('es-CO').format(pesos)} COP`
 }
 
+/** Formatea centavos de USD como `US$2,500`. */
+export function formatUSD(amountInCents: number): string {
+  const dollars = amountInCents / 100
+  const hasCents = amountInCents % 100 !== 0
+  return `US$${new Intl.NumberFormat('en-US', {
+    minimumFractionDigits: hasCents ? 2 : 0,
+    maximumFractionDigits: 2,
+  }).format(dollars)}`
+}
+
 /**
- * Genera una referencia única por pago con el formato `PREFIJO-YYYYMMDD-XXXXXX`.
- * Wompi rechaza una referencia que ya haya sido usada por una transacción
- * aprobada, por eso el sufijo es aleatorio y no un contador.
+ * Genera una referencia única por intento con el formato `PREFIJO-YYYYMMDD-XXXXXX`.
+ * Wompi rechaza una referencia ya usada por una transacción aprobada, por eso el
+ * sufijo es aleatorio y no un contador.
  */
 function generateReference(): string {
   const now = new Date()
@@ -95,10 +151,13 @@ export function buildIntegritySignature(
 }
 
 /**
- * Arma los datos que el frontend necesita para renderizar el Widget de Wompi.
+ * Arma los datos que el frontend necesita para abrir el Widget de Wompi.
  * Lanza si faltan las variables de entorno obligatorias.
  */
-export function createCheckoutSession(): CheckoutSession {
+export function createCheckoutSession(
+  method: PaymentMethodId,
+  origin: string,
+): CheckoutSession {
   const publicKey = process.env.NEXT_PUBLIC_WOMPI_PUBLIC_KEY
   const integritySecret = process.env.WOMPI_INTEGRITY_SECRET
 
@@ -108,9 +167,14 @@ export function createCheckoutSession(): CheckoutSession {
   if (!integritySecret) {
     throw new Error('Falta la variable de entorno WOMPI_INTEGRITY_SECRET')
   }
+  if (!Number.isFinite(USD_TO_COP_RATE) || USD_TO_COP_RATE <= 0) {
+    throw new Error(
+      `USD_TO_COP_RATE debe ser un número mayor a 0 (valor recibido: ${process.env.USD_TO_COP_RATE})`,
+    )
+  }
   if (!Number.isInteger(AMOUNT_IN_CENTS) || AMOUNT_IN_CENTS <= 0) {
     throw new Error(
-      `WOMPI_AMOUNT_IN_CENTS debe ser un entero de centavos mayor a 0 (valor recibido: ${process.env.WOMPI_AMOUNT_IN_CENTS})`,
+      `El monto en centavos de COP no es válido (${AMOUNT_IN_CENTS}). Revisa PRICE_IN_USD_CENTS y USD_TO_COP_RATE.`,
     )
   }
 
@@ -122,6 +186,7 @@ export function createCheckoutSession(): CheckoutSession {
     amountInCents: AMOUNT_IN_CENTS,
     reference,
     signature: buildIntegritySignature(reference, AMOUNT_IN_CENTS, CURRENCY, integritySecret),
-    redirectUrl: THANK_YOU_URL,
+    redirectUrl: new URL('/pago/estado', origin).toString(),
+    paymentMethods: PAYMENT_METHODS[method].wompiMethods,
   }
 }

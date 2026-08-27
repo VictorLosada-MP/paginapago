@@ -1,12 +1,20 @@
-import { Check, ShieldCheck, Clock, Building2, CreditCard, Bitcoin } from "lucide-react"
+import { Check, ShieldCheck, Clock } from "lucide-react"
 
-import { WompiPayButton } from "@/components/wompi-pay-button"
-import { AMOUNT_IN_CENTS, formatCOP } from "@/lib/wompi"
+import { WompiCheckout } from "@/components/wompi-checkout"
+import {
+  AMOUNT_IN_CENTS,
+  PRICE_IN_USD_CENTS,
+  THANK_YOU_URL,
+  formatCOP,
+  formatUSD,
+} from "@/lib/wompi"
 
-// El cobro se hace en COP: Wompi Colombia no liquida en USD. El monto vive en
-// `lib/wompi.ts` (en centavos) para que lo que se muestra aquí y lo que se
-// firma en el backend sean siempre el mismo valor.
-const PRECIO = formatCOP(AMOUNT_IN_CENTS)
+// El precio se fija y se muestra en dólares, pero Wompi Colombia solo liquida
+// en pesos: el cargo real sale en COP. Se muestran los dos para que nadie se
+// lleve una sorpresa en el extracto. Ambos salen del mismo sitio que firma el
+// backend, así que no se pueden desincronizar.
+const PRECIO_USD = formatUSD(PRICE_IN_USD_CENTS)
+const PRECIO_COP = formatCOP(AMOUNT_IN_CENTS)
 
 const incluye = [
   "Sistema a medida construido para tu negocio",
@@ -14,12 +22,6 @@ const incluye = [
   "2 sesiones de capacitación (1 hora cada una)",
   "Material de apoyo sencillo",
   "1 sesión de seguimiento a los 15 días",
-]
-
-const metodos = [
-  { icon: Building2, label: "Transferencia bancaria" },
-  { icon: CreditCard, label: "Tarjeta de crédito/débito" },
-  { icon: Bitcoin, label: "Crypto" },
 ]
 
 export function CheckoutCard() {
@@ -57,9 +59,12 @@ export function CheckoutCard() {
             <div className="flex items-baseline justify-between gap-4">
               <span className="text-sm text-muted-foreground">Inversión total</span>
               <span className="text-2xl font-semibold tracking-tight text-foreground">
-                {PRECIO}
+                {PRECIO_USD}
               </span>
             </div>
+            <p className="mt-2 text-right text-xs leading-relaxed text-muted-foreground">
+              Se cobra {PRECIO_COP}
+            </p>
           </section>
 
           {/* Qué ocurre después del pago */}
@@ -74,24 +79,8 @@ export function CheckoutCard() {
             </div>
           </section>
 
-          {/* Métodos de pago */}
-          <section className="mb-8">
-            <h2 className="mb-4 text-sm font-medium text-muted-foreground">Métodos de pago</h2>
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-              {metodos.map(({ icon: Icon, label }) => (
-                <div
-                  key={label}
-                  className="flex items-center gap-2.5 rounded-lg border border-border bg-background px-4 py-3"
-                >
-                  <Icon className="size-4 shrink-0 text-primary" aria-hidden="true" />
-                  <span className="text-sm leading-tight text-foreground">{label}</span>
-                </div>
-              ))}
-            </div>
-          </section>
-
-          {/* Botón principal: lo renderiza el Widget oficial de Wompi */}
-          <WompiPayButton amountInCents={AMOUNT_IN_CENTS} />
+          {/* Métodos de pago + botón, ambos del checkout de Wompi */}
+          <WompiCheckout amountInCents={AMOUNT_IN_CENTS} thankYouUrl={THANK_YOU_URL} />
 
           {/* Nota de confianza */}
           <div className="mt-6 flex items-start gap-3 border-t border-border pt-6">
