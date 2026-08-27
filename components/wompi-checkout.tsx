@@ -1,17 +1,72 @@
 'use client'
 
-import { Building2, CreditCard, Loader2 } from 'lucide-react'
+import { Bitcoin, Building2, CreditCard, Loader2 } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 
 const WIDGET_SRC = 'https://checkout.wompi.co/widget.js'
+const WIDGET_TIMEOUT_MS = 10_000
 
-/** Debe coincidir con PAYMENT_METHODS de `lib/wompi.ts`. */
+const BLOCKED_MESSAGE =
+  'No pudimos cargar la pasarela de pago. Suele pasar cuando un bloqueador de anuncios o una extensión de seguridad bloquea checkout.wompi.co: desactívala para este sitio y vuelve a intentar.'
+
+/**
+ * Carga el script del widget una sola vez para toda la app.
+ *
+ * Vive fuera del componente a propósito: al ser una promesa compartida, los
+ * montajes dobles de React en desarrollo reutilizan la misma carga en vez de
+ * competir por los listeners del mismo <script>.
+ *
+ * No basta con escuchar `load` y `error`. Un bloqueador puede:
+ *  - responder 200 con el cuerpo vacío → `load` se dispara pero WidgetCheckout
+ *    nunca queda definido, y el botón queda activo sin hacer nada al pulsarlo;
+ *  - dejar la petición colgada → no se dispara ni `load` ni `error`, y el botón
+ *    se queda girando en "Preparando…" para siempre.
+ * Por eso se verifica que WidgetCheckout exista de verdad y se pone un tope de
+ * tiempo.
+ */
+let widgetPromise: Promise<void> | null = null
+
+function loadWidget(): Promise<void> {
+  if (window.WidgetCheckout) return Promise.resolve()
+  if (widgetPromise) return widgetPromise
+
+  widgetPromise = new Promise<void>((resolve, reject) => {
+    const fail = () => {
+      // Se limpia para que un reintento vuelva a pedir el script.
+      widgetPromise = null
+      reject(new Error('No se pudo cargar el widget de Wompi'))
+    }
+
+    const script = document.createElement('script')
+    script.src = WIDGET_SRC
+    script.async = true
+    script.onload = () => (window.WidgetCheckout ? resolve() : fail())
+    script.onerror = fail
+    document.head.appendChild(script)
+
+    setTimeout(() => {
+      if (!window.WidgetCheckout) fail()
+    }, WIDGET_TIMEOUT_MS)
+  })
+
+  return widgetPromise
+}
+
+/**
+ * Los métodos activos deben coincidir con PAYMENT_METHODS de `lib/wompi.ts`.
+ *
+ * Crypto aparece pero no se puede seleccionar: Wompi no lo procesa, así que
+ * dejarlo activo sería ofrecer un pago que no existe. Cuando se conecte una
+ * pasarela de cripto, basta con quitarle `soon` y darle su propio flujo.
+ */
 const METHODS = [
-  { id: 'card', label: 'Tarjeta de crédito/débito', buttonLabel: 'Pagar con tarjeta', icon: CreditCard },
-  { id: 'bank', label: 'Transferencia bancaria', buttonLabel: 'Pagar con transferencia bancaria', icon: Building2 },
+  { id: 'card', label: 'Tarjeta de crédito/débito', buttonLabel: 'Pagar con tarjeta', icon: CreditCard, soon: false },
+  { id: 'bank', label: 'Transferencia bancaria', buttonLabel: 'Pagar con transferencia bancaria', icon: Building2, soon: false },
+  { id: 'crypto', label: 'Crypto', buttonLabel: 'Pagar con crypto', icon: Bitcoin, soon: true },
 ] as const
 
-type MethodId = (typeof METHODS)[number]['id']
+/** Solo los métodos que el backend sabe firmar. */
+type MethodId = 'card' | 'bank'
 
 type CheckoutSession = {
   publicKey: string
@@ -67,6 +122,7 @@ export function WompiCheckout({
   const [method, setMethod] = useState<MethodId>('card')
   const [session, setSession] = useState<CheckoutSession | null>(null)
   const [widgetReady, setWidgetReady] = useState(false)
+  const [loadAttempt, setLoadAttempt] = useState(0)
   const [error, setError] = useState<string | null>(null)
   // Evita que una respuesta lenta de un método pise la del método actual.
   const requestId = useRef(0)
@@ -87,30 +143,20 @@ export function WompiCheckout({
     [amountInCents],
   )
 
-  // Carga el script del widget una sola vez.
+  // Carga el script del widget (compartida, ver `loadWidget`).
   useEffect(() => {
-    if (window.WidgetCheckout) {
-      setWidgetReady(true)
-      return
-    }
-    const existing = document.querySelector<HTMLScriptElement>(`script[src="${WIDGET_SRC}"]`)
-    const script = existing ?? document.createElement('script')
-    const onLoad = () => setWidgetReady(true)
-    const onError = () =>
-      setError('No pudimos cargar la pasarela de pago. Revisa tu conexión e inténtalo de nuevo.')
-
-    script.addEventListener('load', onLoad)
-    script.addEventListener('error', onError)
-    if (!existing) {
-      script.src = WIDGET_SRC
-      script.async = true
-      document.head.appendChild(script)
-    }
+    let cancelled = false
+    loadWidget()
+      .then(() => {
+        if (!cancelled) setWidgetReady(true)
+      })
+      .catch(() => {
+        if (!cancelled) setError(BLOCKED_MESSAGE)
+      })
     return () => {
-      script.removeEventListener('load', onLoad)
-      script.removeEventListener('error', onError)
+      cancelled = true
     }
-  }, [])
+  }, [loadAttempt])
 
   // Pide una sesión nueva cada vez que cambia el método, para que la firma
   // corresponda siempre al método que se va a abrir.
@@ -126,7 +172,12 @@ export function WompiCheckout({
   }, [method, fetchSession])
 
   function handlePay() {
-    if (!session || !window.WidgetCheckout) return
+    if (!session) return
+    // El script pudo cargar "bien" y aun así no dejar el widget disponible.
+    if (!window.WidgetCheckout) {
+      setError(BLOCKED_MESSAGE)
+      return
+    }
     setError(null)
 
     const checkout = new window.WidgetCheckout({
@@ -173,28 +224,36 @@ export function WompiCheckout({
         <div
           role="radiogroup"
           aria-label="Método de pago"
-          className="grid grid-cols-1 gap-3 sm:grid-cols-2"
+          className="grid grid-cols-1 gap-3 sm:grid-cols-3"
         >
-          {METHODS.map(({ id, label, icon: Icon }) => {
-            const isSelected = id === method
+          {METHODS.map(({ id, label, icon: Icon, soon }) => {
+            const isSelected = !soon && id === method
             return (
               <button
                 key={id}
                 type="button"
                 role="radio"
                 aria-checked={isSelected}
-                onClick={() => setMethod(id)}
+                disabled={soon}
+                onClick={() => !soon && setMethod(id as MethodId)}
                 className={`flex items-center gap-2.5 rounded-lg border px-4 py-3 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-card ${
-                  isSelected
-                    ? 'border-primary bg-accent'
-                    : 'border-border bg-background hover:bg-secondary'
+                  soon
+                    ? 'cursor-not-allowed border-border bg-background opacity-60'
+                    : isSelected
+                      ? 'border-primary bg-accent'
+                      : 'border-border bg-background hover:bg-secondary'
                 }`}
               >
                 <Icon
                   className={`size-4 shrink-0 ${isSelected ? 'text-primary' : 'text-muted-foreground'}`}
                   aria-hidden="true"
                 />
-                <span className="text-sm leading-tight text-foreground">{label}</span>
+                <span className="flex flex-col leading-tight">
+                  <span className="text-sm text-foreground">{label}</span>
+                  {soon && (
+                    <span className="text-xs text-muted-foreground">Próximamente</span>
+                  )}
+                </span>
               </button>
             )
           })}
@@ -218,12 +277,22 @@ export function WompiCheckout({
       </button>
 
       {error && (
-        <p
+        <div
           role="alert"
           className="mt-3 rounded-xl border border-destructive/30 bg-destructive/5 px-4 py-3 text-sm leading-relaxed text-destructive"
         >
-          {error}
-        </p>
+          <p>{error}</p>
+          <button
+            type="button"
+            onClick={() => {
+              setError(null)
+              setLoadAttempt((n) => n + 1)
+            }}
+            className="mt-2 font-semibold underline underline-offset-4 hover:no-underline"
+          >
+            Reintentar
+          </button>
+        </div>
       )}
     </>
   )
