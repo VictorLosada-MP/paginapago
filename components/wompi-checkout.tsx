@@ -74,7 +74,7 @@ type CheckoutSession = {
   amountInCents: number
   reference: string
   signature: string
-  redirectUrl: string
+  redirectUrl?: string
   paymentMethods: string
 }
 
@@ -186,7 +186,8 @@ export function WompiCheckout({
       reference: session.reference,
       publicKey: session.publicKey,
       signature: { integrity: session.signature },
-      redirectUrl: session.redirectUrl,
+      // En local no viene: Wompi devuelve 403 si apunta a localhost.
+      ...(session.redirectUrl ? { redirectUrl: session.redirectUrl } : {}),
       paymentMethods: session.paymentMethods,
     })
 
