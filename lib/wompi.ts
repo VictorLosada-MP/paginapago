@@ -77,6 +77,33 @@ export function isPaymentMethodId(value: unknown): value is PaymentMethodId {
   return typeof value === 'string' && value in PAYMENT_METHODS
 }
 
+/** Direcciones que no son alcanzables desde internet. */
+const LOCAL_HOSTNAME = /^(localhost|0\.0\.0\.0|127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|\[?::1\]?$)/
+
+/**
+ * ¿Se puede llegar a este origen desde internet?
+ *
+ * Importa porque Wompi RECHAZA con 403 el checkout cuando `redirect-url` apunta
+ * a una dirección local o privada (comprobado con localhost, 127.0.0.1 y
+ * 192.168.x.x; con un dominio público responde 200). El iframe del widget
+ * nunca carga y el modal se queda girando para siempre, sin ningún error
+ * visible en la página.
+ *
+ * Por eso en desarrollo local el `redirectUrl` simplemente no se manda: los
+ * pagos con tarjeta se resuelven por el callback del widget, que no necesita
+ * redirección. Los que salen de la página (PSE, Bancolombia) sí la necesitan,
+ * así que para probarlos de punta a punta hace falta una URL pública —un
+ * preview de Vercel o un túnel tipo ngrok—, no localhost.
+ */
+export function isPubliclyRoutableOrigin(origin: string): boolean {
+  try {
+    const { hostname } = new URL(origin)
+    return !LOCAL_HOSTNAME.test(hostname) && hostname.includes('.')
+  } catch {
+    return false
+  }
+}
+
 export type CheckoutSession = {
   /** Llave PÚBLICA de Wompi. Es la única llave que puede ver el navegador. */
   publicKey: string
@@ -90,8 +117,10 @@ export type CheckoutSession = {
    * A dónde vuelve Wompi cuando el pago sale de la página (PSE, Bancolombia).
    * Apunta a nuestra propia pantalla de estado, NO a la de agradecimiento:
    * ahí se verifica contra la API de Wompi si la transacción quedó aprobada.
+   *
+   * Se omite en desarrollo local (ver `isPubliclyRoutableOrigin`).
    */
-  redirectUrl: string
+  redirectUrl?: string
   /** Métodos que se le muestran al usuario dentro del modal, separados por comas. */
   paymentMethods: string
 }
@@ -186,7 +215,9 @@ export function createCheckoutSession(
     amountInCents: AMOUNT_IN_CENTS,
     reference,
     signature: buildIntegritySignature(reference, AMOUNT_IN_CENTS, CURRENCY, integritySecret),
-    redirectUrl: new URL('/pago/estado', origin).toString(),
+    ...(isPubliclyRoutableOrigin(origin)
+      ? { redirectUrl: new URL('/pago/estado', origin).toString() }
+      : {}),
     paymentMethods: PAYMENT_METHODS[method].wompiMethods,
   }
 }
