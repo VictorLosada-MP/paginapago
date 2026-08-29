@@ -54,25 +54,18 @@ export const THANK_YOU_URL =
  * y el texto del botón. Los códigos son los que acepta el widget:
  * CARD, NEQUI, BANCOLOMBIA_TRANSFER, BANCOLOMBIA_COLLECT, PSE.
  *
- * Van como string separado por comas, NO como array: el widget hace
- * `paymentMethods.split(",")` y con un array revienta con
- * "e.split is not a function" sin abrir el modal.
- *
- * Además, si se pide un código que el comercio NO tiene habilitado, Wompi no
- * lo ignora: devuelve la lista vacía y el modal se abre sin ninguna opción.
- * Por eso lo que se pide aquí se cruza en tiempo real con los métodos que el
- * comercio tiene de verdad (ver `fetchMerchantPaymentMethods`).
+ * El filtro que se le manda al checkout no se escribe aquí: se calcula en
+ * `resolveWompiFilter` a partir de los métodos que el comercio tenga
+ * habilitados, porque el código de la fila "Transferencia" depende de ellos.
  */
 export const PAYMENT_METHODS = {
   card: {
     label: 'Tarjeta de crédito/débito',
     buttonLabel: 'Pagar con tarjeta',
-    wompiMethods: 'CARD',
   },
   bank: {
     label: 'Transferencia bancaria',
     buttonLabel: 'Pagar con transferencia bancaria',
-    wompiMethods: 'PSE,BANCOLOMBIA_TRANSFER',
   },
 } as const
 
@@ -110,25 +103,63 @@ export function isPubliclyRoutableOrigin(origin: string): boolean {
 }
 
 /**
- * Códigos que el checkout de Wompi respeta de verdad en `payment-methods`.
+ * Cómo se filtra el modal de Wompi.
  *
- * Comprobado renderizando el checkout real con la llave del comercio:
+ * El checkout NO acepta los códigos sueltos de transferencia: pedir "PSE" o
+ * "BANCOLOMBIA_TRANSFER" deja el modal vacío. Lo comprobado renderizando el
+ * checkout real con la llave del comercio:
  *
- *   (sin filtro)                        → Transferencia / Tarjeta / Paga con crédito
- *   CARD                                → Tarjeta
- *   PSE                                 → NINGUNA
- *   BANCOLOMBIA_TRANSFER                → NINGUNA
- *   NEQUI                               → NINGUNA
- *   CARD,NEQUI,PSE,BANCOLOMBIA_TRANSFER → solo Tarjeta
+ *   (sin filtro)                   Transferencia / Tarjeta / Paga con crédito
+ *   CARD                           Tarjeta
+ *   PSE                            NINGUNA
+ *   BANCOLOMBIA_TRANSFER           NINGUNA
+ *   PSE_QR_BOTON_NEQUI_DAVIPLATA   Transferencia
+ *   PAYMENT_WITH_CREDIT            Paga con crédito
  *
- * El checkout nuevo agrupa transferencias y billeteras bajo la categoría
- * "Transferencia" y ya no las reconoce por su código individual: pedirlas
- * devuelve la lista vacía. Así que el filtro solo se manda cuando TODOS los
- * códigos pedidos están aquí; si no, no se filtra y el comprador elige dentro
- * del modal de Wompi. Mostrar todas las opciones es mucho mejor que mostrar
- * ninguna.
+ * OJO: el widget (widget.js) y el checkout (/p/) NO entienden lo mismo. El
+ * widget valida contra una lista blanca vieja de cinco códigos y lanza
+ * excepción con el compuesto, sin llegar a abrir el modal. Por eso la opción
+ * de transferencia no usa el widget sino el Web Checkout de página completa,
+ * que sí lo acepta.
+ *
+ * El motivo está en su bundle: las transferencias se fusionan en UNA sola fila
+ * cuyo código es la concatenación de las que el comercio tenga habilitadas,
+ * renombrando BANCOLOMBIA_QR -> QR y BANCOLOMBIA_TRANSFER -> BOTON, en este
+ * orden fijo. Por eso el código depende del comercio y hay que calcularlo:
+ * `PSE_QR_BOTON` (sin Nequi ni Daviplata) también devuelve vacío si el
+ * comercio sí las tiene.
  */
-const FILTERABLE_METHODS = ['CARD']
+const TRANSFER_ALIASES: Record<string, string> = {
+  PSE: 'PSE',
+  BANCOLOMBIA_QR: 'QR',
+  BANCOLOMBIA_TRANSFER: 'BOTON',
+  NEQUI: 'NEQUI',
+  DAVIPLATA: 'DAVIPLATA',
+}
+
+/** El orden importa: es el que usa Wompi para armar el código. */
+const TRANSFER_ORDER = ['PSE', 'QR', 'BOTON', 'NEQUI', 'DAVIPLATA']
+
+/**
+ * Arma el código de la fila "Transferencia" para los métodos que el comercio
+ * tenga habilitados. Devuelve null si no tiene ninguno.
+ */
+function buildTransferGroupCode(enabled: string[]): string | null {
+  const parts = enabled.map((m) => TRANSFER_ALIASES[m]).filter(Boolean)
+  if (parts.length === 0) return null
+  return TRANSFER_ORDER.filter((p) => parts.includes(p)).join('_')
+}
+
+/**
+ * Traduce la opción elegida al filtro que entiende el checkout.
+ * Devuelve '' cuando no se puede filtrar: entonces se muestran todas las
+ * opciones, que siempre es mejor que un modal en blanco.
+ */
+function resolveWompiFilter(method: PaymentMethodId, enabled: string[] | null): string {
+  if (!enabled) return ''
+  if (method === 'card') return enabled.includes('CARD') ? 'CARD' : ''
+  return buildTransferGroupCode(enabled) ?? ''
+}
 
 /**
  * Métodos que el comercio tiene habilitados de verdad, según Wompi.
@@ -159,6 +190,34 @@ async function fetchMerchantPaymentMethods(publicKey: string): Promise<string[] 
   }
 }
 
+/** URL base del Web Checkout de página completa. */
+const WEB_CHECKOUT_URL = 'https://checkout.wompi.co/p/'
+
+/**
+ * Arma la URL del Web Checkout con los mismos datos firmados.
+ * Se usa para transferencia, donde el widget no sabe filtrar.
+ */
+function buildWebCheckoutUrl(session: {
+  publicKey: string
+  currency: string
+  amountInCents: number
+  reference: string
+  signature: string
+  redirectUrl?: string
+  paymentMethods: string
+}): string {
+  const params = new URLSearchParams({
+    'public-key': session.publicKey,
+    currency: session.currency,
+    'amount-in-cents': String(session.amountInCents),
+    reference: session.reference,
+    'signature:integrity': session.signature,
+  })
+  if (session.paymentMethods) params.set('payment-methods', session.paymentMethods)
+  if (session.redirectUrl) params.set('redirect-url', session.redirectUrl)
+  return `${WEB_CHECKOUT_URL}?${params}`
+}
+
 export type CheckoutSession = {
   /** Llave PÚBLICA de Wompi. Es la única llave que puede ver el navegador. */
   publicKey: string
@@ -177,11 +236,17 @@ export type CheckoutSession = {
    */
   redirectUrl?: string
   /**
-   * Métodos que se le muestran al usuario dentro del modal, separados por comas.
+   * Métodos que se le muestran al usuario, separados por comas.
    * Vacío significa "no filtrar": el frontend entonces omite la opción para que
    * Wompi muestre todos los métodos del comercio.
    */
   paymentMethods: string
+  /**
+   * Si viene, hay que redirigir a esta URL en vez de abrir el modal: es el Web
+   * Checkout de página completa, el único que entiende el código de la fila
+   * "Transferencia".
+   */
+  webCheckoutUrl?: string
 }
 
 /** Formatea centavos de COP como `$10.000.000 COP`. */
@@ -275,24 +340,19 @@ export async function createCheckoutSession(
 
   const reference = generateReference()
 
-  // Solo se piden los métodos que el comercio tiene habilitados: pedir uno que
-  // no tenga deja el modal sin ninguna opción.
-  const wanted = PAYMENT_METHODS[method].wompiMethods.split(',')
+  // El filtro se calcula a partir de los métodos que el comercio tiene
+  // habilitados de verdad, no de una lista escrita a mano.
   const enabled = await fetchMerchantPaymentMethods(publicKey)
-  const available = enabled ? wanted.filter((m) => enabled.includes(m)) : wanted
+  const paymentMethods = resolveWompiFilter(method, enabled)
 
-  if (enabled && available.length === 0) {
+  if (enabled && !paymentMethods) {
     console.error(
-      `[wompi] Ninguno de los métodos de "${method}" (${wanted.join(', ')}) está habilitado ` +
-        `en el comercio (habilitados: ${enabled.join(', ')}). Se mostrarán todos los disponibles.`,
+      `[wompi] No se pudo armar el filtro para "${method}" con los métodos del ` +
+        `comercio (${enabled.join(', ')}). Se mostrarán todas las opciones.`,
     )
   }
 
-  // Solo se filtra si el checkout respeta todos los códigos pedidos.
-  const canFilter =
-    available.length > 0 && available.every((m) => FILTERABLE_METHODS.includes(m))
-
-  return {
+  const session = {
     publicKey,
     currency: CURRENCY,
     amountInCents: AMOUNT_IN_CENTS,
@@ -301,8 +361,14 @@ export async function createCheckoutSession(
     ...(isPubliclyRoutableOrigin(origin)
       ? { redirectUrl: new URL('/pago/estado', origin).toString() }
       : {}),
-    // Lista vacía = no se filtra, así el usuario ve todas las opciones del
-    // comercio en lugar de un modal en blanco.
-    paymentMethods: canFilter ? available.join(',') : '',
+    // Vacío = no se filtra, así el usuario ve todas las opciones del comercio
+    // en lugar de un modal en blanco.
+    paymentMethods,
   }
+
+  // Tarjeta se queda en el modal (el widget filtra CARD sin problema); la
+  // transferencia va por el Web Checkout, que es el único que acepta su código.
+  return method === 'bank' && paymentMethods
+    ? { ...session, webCheckoutUrl: buildWebCheckoutUrl(session) }
+    : session
 }

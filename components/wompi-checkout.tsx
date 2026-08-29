@@ -80,6 +80,7 @@ type CheckoutSession = {
   signature: string
   redirectUrl?: string
   paymentMethods: string
+  webCheckoutUrl?: string
 }
 
 /** Lo que devuelve el widget en el callback de `open()`. */
@@ -203,6 +204,16 @@ export function WompiCheckout({
     // usuario pudo haber cambiado de opción.
     const wompiMethod = method === 'crypto' ? 'card' : method
     if (!session) return
+
+    // Transferencia va por el Web Checkout de página completa: el widget no
+    // acepta el código de esa fila y ni siquiera abre. Al volver, /pago/estado
+    // verifica el estado real contra la API de Wompi.
+    if (session.webCheckoutUrl) {
+      setRedirecting(true)
+      window.location.assign(session.webCheckoutUrl)
+      return
+    }
+
     // El script pudo cargar "bien" y aun así no dejar el widget disponible.
     if (!window.WidgetCheckout) {
       setError(BLOCKED_MESSAGE)
@@ -250,7 +261,7 @@ export function WompiCheckout({
 
   const selected = METHODS.find((m) => m.id === method) ?? METHODS[0]
   const isCrypto = method === 'crypto'
-  const disabled = isCrypto ? redirecting : !session || !widgetReady
+  const disabled = isCrypto || redirecting ? redirecting || !session : !session || !widgetReady
 
   return (
     <>
@@ -305,7 +316,7 @@ export function WompiCheckout({
         {disabled && !error ? (
           <>
             <Loader2 className="size-4 animate-spin" aria-hidden="true" />
-            {isCrypto ? 'Abriendo el checkout…' : 'Preparando el pago seguro…'}
+            {isCrypto || redirecting ? 'Abriendo el checkout…' : 'Preparando el pago seguro…'}
           </>
         ) : (
           selected.buttonLabel
