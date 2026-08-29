@@ -21,7 +21,7 @@ export const dynamic = 'force-dynamic'
  * petición del propio navegador.
  */
 function resolveOrigin(request: Request): string {
-  const configured = process.env.NEXT_PUBLIC_SITE_URL
+  const configured = process.env.NEXT_PUBLIC_SITE_URL?.trim()
   if (configured) return configured
 
   const originHeader = request.headers.get('origin')

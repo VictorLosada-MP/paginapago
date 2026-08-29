@@ -12,8 +12,8 @@ export const dynamic = 'force-dynamic'
 
 function resolveOrigin(request: Request): string {
   return (
-    process.env.NEXT_PUBLIC_SITE_URL ??
-    request.headers.get('origin') ??
+    process.env.NEXT_PUBLIC_SITE_URL?.trim() ||
+    request.headers.get('origin') ||
     new URL(request.url).origin
   )
 }
