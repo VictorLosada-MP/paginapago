@@ -145,8 +145,11 @@ export function formatUSD(amountInCents: number): string {
  * Genera una referencia única por intento con el formato `PREFIJO-YYYYMMDD-XXXXXX`.
  * Wompi rechaza una referencia ya usada por una transacción aprobada, por eso el
  * sufijo es aleatorio y no un contador.
+ *
+ * También la usa el checkout de cripto como `order_id`, para que una venta se
+ * pueda rastrear igual sin importar por dónde se pagó.
  */
-function generateReference(): string {
+export function generateReference(): string {
   const now = new Date()
   const date = [
     now.getUTCFullYear(),

@@ -1,6 +1,7 @@
 import { Check, ShieldCheck, Clock } from "lucide-react"
 
 import { WompiCheckout } from "@/components/wompi-checkout"
+import { CRYPTO_ENABLED } from "@/lib/nowpayments"
 import {
   AMOUNT_IN_CENTS,
   PRICE_IN_USD_CENTS,
@@ -80,7 +81,11 @@ export function CheckoutCard() {
           </section>
 
           {/* Métodos de pago + botón, ambos del checkout de Wompi */}
-          <WompiCheckout amountInCents={AMOUNT_IN_CENTS} thankYouUrl={THANK_YOU_URL} />
+          <WompiCheckout
+            amountInCents={AMOUNT_IN_CENTS}
+            thankYouUrl={THANK_YOU_URL}
+            cryptoEnabled={CRYPTO_ENABLED}
+          />
 
           {/* Nota de confianza */}
           <div className="mt-6 flex items-start gap-3 border-t border-border pt-6">
