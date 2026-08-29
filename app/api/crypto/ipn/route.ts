@@ -22,6 +22,17 @@ export async function POST(request: Request) {
   const rawBody = await request.text()
   const signature = request.headers.get('x-nowpayments-sig')
 
+  // Se distingue el motivo porque, si no, "firma inválida" despista: lo más
+  // común la primera vez es que el secreto no esté configurado todavía.
+  if (!process.env.NOWPAYMENTS_IPN_SECRET) {
+    console.error(
+      '[nowpayments] Llegó un webhook pero NOWPAYMENTS_IPN_SECRET no está definida, ' +
+        'así que no se puede verificar y se descarta. Copia el secreto desde ' +
+        'NOWPayments → Configuración → Pagos → Notificaciones de pago instantáneas.',
+    )
+    return NextResponse.json({ error: 'Webhook no configurado' }, { status: 401 })
+  }
+
   if (!isValidIpnSignature(rawBody, signature)) {
     console.warn('[nowpayments] IPN con firma inválida: descartado')
     return NextResponse.json({ error: 'Firma inválida' }, { status: 401 })
