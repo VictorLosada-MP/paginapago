@@ -57,6 +57,11 @@ export const THANK_YOU_URL =
  * Van como string separado por comas, NO como array: el widget hace
  * `paymentMethods.split(",")` y con un array revienta con
  * "e.split is not a function" sin abrir el modal.
+ *
+ * Además, si se pide un código que el comercio NO tiene habilitado, Wompi no
+ * lo ignora: devuelve la lista vacía y el modal se abre sin ninguna opción.
+ * Por eso lo que se pide aquí se cruza en tiempo real con los métodos que el
+ * comercio tiene de verdad (ver `fetchMerchantPaymentMethods`).
  */
 export const PAYMENT_METHODS = {
   card: {
@@ -67,7 +72,7 @@ export const PAYMENT_METHODS = {
   bank: {
     label: 'Transferencia bancaria',
     buttonLabel: 'Pagar con transferencia bancaria',
-    wompiMethods: 'PSE,BANCOLOMBIA_TRANSFER,BANCOLOMBIA_COLLECT',
+    wompiMethods: 'PSE,BANCOLOMBIA_TRANSFER',
   },
 } as const
 
@@ -104,6 +109,35 @@ export function isPubliclyRoutableOrigin(origin: string): boolean {
   }
 }
 
+/**
+ * Métodos que el comercio tiene habilitados de verdad, según Wompi.
+ *
+ * El endpoint es público (no necesita llave privada) y se cachea unos minutos:
+ * la lista casi nunca cambia, pero si se habilita o deshabilita un método en
+ * el panel, el checkout se adapta solo sin tocar código.
+ *
+ * Devuelve null si no se puede consultar; en ese caso se usa la lista fija.
+ */
+async function fetchMerchantPaymentMethods(publicKey: string): Promise<string[] | null> {
+  const baseUrl = publicKey.startsWith('pub_prod_')
+    ? 'https://production.wompi.co/v1'
+    : 'https://sandbox.wompi.co/v1'
+
+  try {
+    const response = await fetch(`${baseUrl}/merchants/${encodeURIComponent(publicKey)}`, {
+      next: { revalidate: 300 },
+    })
+    if (!response.ok) return null
+    const body = (await response.json()) as {
+      data?: { accepted_payment_methods?: string[] }
+    }
+    return body.data?.accepted_payment_methods ?? null
+  } catch (error) {
+    console.error('[wompi] No se pudieron consultar los métodos del comercio:', error)
+    return null
+  }
+}
+
 export type CheckoutSession = {
   /** Llave PÚBLICA de Wompi. Es la única llave que puede ver el navegador. */
   publicKey: string
@@ -121,7 +155,11 @@ export type CheckoutSession = {
    * Se omite en desarrollo local (ver `isPubliclyRoutableOrigin`).
    */
   redirectUrl?: string
-  /** Métodos que se le muestran al usuario dentro del modal, separados por comas. */
+  /**
+   * Métodos que se le muestran al usuario dentro del modal, separados por comas.
+   * Vacío significa "no filtrar": el frontend entonces omite la opción para que
+   * Wompi muestre todos los métodos del comercio.
+   */
   paymentMethods: string
 }
 
@@ -186,10 +224,10 @@ export function buildIntegritySignature(
  * Arma los datos que el frontend necesita para abrir el Widget de Wompi.
  * Lanza si faltan las variables de entorno obligatorias.
  */
-export function createCheckoutSession(
+export async function createCheckoutSession(
   method: PaymentMethodId,
   origin: string,
-): CheckoutSession {
+): Promise<CheckoutSession> {
   // .trim() no es paranoia: al pegar una llave en el panel de Vercel es muy
   // fácil arrastrar un salto de línea invisible. Ya pasó con la llave pública
   // (42 caracteres en vez de 41), y en el secreto de integridad haría que
@@ -216,6 +254,19 @@ export function createCheckoutSession(
 
   const reference = generateReference()
 
+  // Solo se piden los métodos que el comercio tiene habilitados: pedir uno que
+  // no tenga deja el modal sin ninguna opción.
+  const wanted = PAYMENT_METHODS[method].wompiMethods.split(',')
+  const enabled = await fetchMerchantPaymentMethods(publicKey)
+  const available = enabled ? wanted.filter((m) => enabled.includes(m)) : wanted
+
+  if (enabled && available.length === 0) {
+    console.error(
+      `[wompi] Ninguno de los métodos de "${method}" (${wanted.join(', ')}) está habilitado ` +
+        `en el comercio (habilitados: ${enabled.join(', ')}). Se mostrarán todos los disponibles.`,
+    )
+  }
+
   return {
     publicKey,
     currency: CURRENCY,
@@ -225,6 +276,8 @@ export function createCheckoutSession(
     ...(isPubliclyRoutableOrigin(origin)
       ? { redirectUrl: new URL('/pago/estado', origin).toString() }
       : {}),
-    paymentMethods: PAYMENT_METHODS[method].wompiMethods,
+    // Lista vacía = no se filtra, así el usuario ve todas las opciones del
+    // comercio en lugar de un modal en blanco.
+    paymentMethods: available.join(','),
   }
 }
