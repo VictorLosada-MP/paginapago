@@ -24,7 +24,7 @@ export async function POST(request: Request) {
 
   // Se distingue el motivo porque, si no, "firma inválida" despista: lo más
   // común la primera vez es que el secreto no esté configurado todavía.
-  if (!process.env.NOWPAYMENTS_IPN_SECRET) {
+  if (!process.env.NOWPAYMENTS_IPN_SECRET?.trim()) {
     console.error(
       '[nowpayments] Llegó un webhook pero NOWPAYMENTS_IPN_SECRET no está definida, ' +
         'así que no se puede verificar y se descarta. Copia el secreto desde ' +

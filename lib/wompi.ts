@@ -18,7 +18,7 @@ export const CURRENCY = 'COP' as const
 
 /** Precio de la oferta en CENTAVOS de dólar. 250000 = US$2,500.00 */
 export const PRICE_IN_USD_CENTS = Number.parseInt(
-  process.env.PRICE_IN_USD_CENTS ?? '250000',
+  process.env.PRICE_IN_USD_CENTS?.trim() || '250000',
   10,
 )
 
@@ -30,7 +30,7 @@ export const PRICE_IN_USD_CENTS = Number.parseInt(
  * haría que el precio bailara entre una visita y otra. Hay que revisarla a mano
  * cuando la tasa se mueva (variable `USD_TO_COP_RATE`).
  */
-export const USD_TO_COP_RATE = Number.parseFloat(process.env.USD_TO_COP_RATE ?? '4000')
+export const USD_TO_COP_RATE = Number.parseFloat(process.env.USD_TO_COP_RATE?.trim() || '4000')
 
 /**
  * Monto del cargo en CENTAVOS de peso colombiano.
@@ -41,11 +41,11 @@ export const USD_TO_COP_RATE = Number.parseFloat(process.env.USD_TO_COP_RATE ?? 
 export const AMOUNT_IN_CENTS = Math.round(PRICE_IN_USD_CENTS * USD_TO_COP_RATE)
 
 /** Prefijo de la referencia de pago, ej: `VICTOR-20260825-ABC123`. */
-const REFERENCE_PREFIX = process.env.WOMPI_REFERENCE_PREFIX ?? 'VICTOR'
+const REFERENCE_PREFIX = process.env.WOMPI_REFERENCE_PREFIX?.trim() || 'VICTOR'
 
 /** Página de Agradecimiento. Solo se llega ahí si la transacción quedó APPROVED. */
 export const THANK_YOU_URL =
-  process.env.NEXT_PUBLIC_THANK_YOU_URL ?? 'https://pageagradecimiento.vercel.app/'
+  process.env.NEXT_PUBLIC_THANK_YOU_URL?.trim() || 'https://pageagradecimiento.vercel.app/'
 
 /**
  * Métodos de pago que puede elegir el usuario.
@@ -190,8 +190,12 @@ export function createCheckoutSession(
   method: PaymentMethodId,
   origin: string,
 ): CheckoutSession {
-  const publicKey = process.env.NEXT_PUBLIC_WOMPI_PUBLIC_KEY
-  const integritySecret = process.env.WOMPI_INTEGRITY_SECRET
+  // .trim() no es paranoia: al pegar una llave en el panel de Vercel es muy
+  // fácil arrastrar un salto de línea invisible. Ya pasó con la llave pública
+  // (42 caracteres en vez de 41), y en el secreto de integridad haría que
+  // TODAS las firmas salieran mal y Wompi rechazara cada cobro.
+  const publicKey = process.env.NEXT_PUBLIC_WOMPI_PUBLIC_KEY?.trim()
+  const integritySecret = process.env.WOMPI_INTEGRITY_SECRET?.trim()
 
   if (!publicKey) {
     throw new Error('Falta la variable de entorno NEXT_PUBLIC_WOMPI_PUBLIC_KEY')

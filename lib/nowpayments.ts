@@ -10,10 +10,10 @@ import { createHmac, timingSafeEqual } from 'node:crypto'
  * conversión a pesos ni tasa de cambio que mantener.
  */
 
-const API_URL = process.env.NOWPAYMENTS_API_URL ?? 'https://api.nowpayments.io/v1'
+const API_URL = process.env.NOWPAYMENTS_API_URL?.trim() || 'https://api.nowpayments.io/v1'
 
 /** El botón de cripto solo se ofrece si la pasarela está configurada. */
-export const CRYPTO_ENABLED = Boolean(process.env.NOWPAYMENTS_API_KEY)
+export const CRYPTO_ENABLED = Boolean(process.env.NOWPAYMENTS_API_KEY?.trim())
 
 /**
  * Estados que reporta NOWPayments.
@@ -50,7 +50,7 @@ export type IpnPayload = {
 }
 
 function requireApiKey(): string {
-  const key = process.env.NOWPAYMENTS_API_KEY
+  const key = process.env.NOWPAYMENTS_API_KEY?.trim()
   if (!key) throw new Error('Falta la variable de entorno NOWPAYMENTS_API_KEY')
   return key
 }
@@ -150,7 +150,7 @@ export function sortObjectKeys(value: unknown): unknown {
  * mandarnos un "pago aprobado" falso.
  */
 export function isValidIpnSignature(rawBody: string, signature: string | null): boolean {
-  const secret = process.env.NOWPAYMENTS_IPN_SECRET
+  const secret = process.env.NOWPAYMENTS_IPN_SECRET?.trim()
   if (!secret || !signature) return false
 
   let parsed: unknown
