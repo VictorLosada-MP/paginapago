@@ -54,7 +54,7 @@ export async function POST(request: Request) {
   }
 
   try {
-    return NextResponse.json(createCheckoutSession(method, resolveOrigin(request)))
+    return NextResponse.json(await createCheckoutSession(method, resolveOrigin(request)))
   } catch (error) {
     console.error('[wompi] No se pudo generar la sesión de checkout:', error)
     return NextResponse.json(

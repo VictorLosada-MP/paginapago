@@ -218,7 +218,10 @@ export function WompiCheckout({
       signature: { integrity: session.signature },
       // En local no viene: Wompi devuelve 403 si apunta a localhost.
       ...(session.redirectUrl ? { redirectUrl: session.redirectUrl } : {}),
-      paymentMethods: session.paymentMethods,
+      // Si viene vacío hay que OMITIR la clave, no mandar "": el validador del
+      // widget hace "".split(",") -> [""], no lo encuentra entre sus códigos y
+      // lanza excepción sin abrir el modal. Vacío significa "no filtres".
+      ...(session.paymentMethods ? { paymentMethods: session.paymentMethods } : {}),
     })
 
     // No se bloquea el botón mientras el modal está abierto: Wompi no siempre
