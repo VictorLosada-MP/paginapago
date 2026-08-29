@@ -110,6 +110,27 @@ export function isPubliclyRoutableOrigin(origin: string): boolean {
 }
 
 /**
+ * Códigos que el checkout de Wompi respeta de verdad en `payment-methods`.
+ *
+ * Comprobado renderizando el checkout real con la llave del comercio:
+ *
+ *   (sin filtro)                        → Transferencia / Tarjeta / Paga con crédito
+ *   CARD                                → Tarjeta
+ *   PSE                                 → NINGUNA
+ *   BANCOLOMBIA_TRANSFER                → NINGUNA
+ *   NEQUI                               → NINGUNA
+ *   CARD,NEQUI,PSE,BANCOLOMBIA_TRANSFER → solo Tarjeta
+ *
+ * El checkout nuevo agrupa transferencias y billeteras bajo la categoría
+ * "Transferencia" y ya no las reconoce por su código individual: pedirlas
+ * devuelve la lista vacía. Así que el filtro solo se manda cuando TODOS los
+ * códigos pedidos están aquí; si no, no se filtra y el comprador elige dentro
+ * del modal de Wompi. Mostrar todas las opciones es mucho mejor que mostrar
+ * ninguna.
+ */
+const FILTERABLE_METHODS = ['CARD']
+
+/**
  * Métodos que el comercio tiene habilitados de verdad, según Wompi.
  *
  * El endpoint es público (no necesita llave privada) y se cachea unos minutos:
@@ -267,6 +288,10 @@ export async function createCheckoutSession(
     )
   }
 
+  // Solo se filtra si el checkout respeta todos los códigos pedidos.
+  const canFilter =
+    available.length > 0 && available.every((m) => FILTERABLE_METHODS.includes(m))
+
   return {
     publicKey,
     currency: CURRENCY,
@@ -278,6 +303,6 @@ export async function createCheckoutSession(
       : {}),
     // Lista vacía = no se filtra, así el usuario ve todas las opciones del
     // comercio en lugar de un modal en blanco.
-    paymentMethods: available.join(','),
+    paymentMethods: canFilter ? available.join(',') : '',
   }
 }
