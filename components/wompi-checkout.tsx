@@ -53,20 +53,24 @@ function loadWidget(): Promise<void> {
 }
 
 /**
- * Los métodos activos deben coincidir con PAYMENT_METHODS de `lib/wompi.ts`.
+ * Métodos disponibles. `card` y `bank` los cobra Wompi (ver PAYMENT_METHODS en
+ * `lib/wompi.ts`); `crypto` va por NOWPayments, que es otra pasarela y otro
+ * flujo: en vez de abrir un modal, redirige a una factura alojada por ellos.
  *
- * Crypto aparece pero no se puede seleccionar: Wompi no lo procesa, así que
- * dejarlo activo sería ofrecer un pago que no existe. Cuando se conecte una
- * pasarela de cripto, basta con quitarle `soon` y darle su propio flujo.
+ * Crypto solo se puede seleccionar si la pasarela está configurada en el
+ * servidor; si no, se muestra como "Próximamente" en vez de ofrecer un pago
+ * que no existe.
  */
 const METHODS = [
-  { id: 'card', label: 'Tarjeta de crédito/débito', buttonLabel: 'Pagar con tarjeta', icon: CreditCard, soon: false },
-  { id: 'bank', label: 'Transferencia bancaria', buttonLabel: 'Pagar con transferencia bancaria', icon: Building2, soon: false },
-  { id: 'crypto', label: 'Crypto', buttonLabel: 'Pagar con crypto', icon: Bitcoin, soon: true },
+  { id: 'card', label: 'Tarjeta de crédito/débito', buttonLabel: 'Pagar con tarjeta', icon: CreditCard },
+  { id: 'bank', label: 'Transferencia bancaria', buttonLabel: 'Pagar con transferencia bancaria', icon: Building2 },
+  { id: 'crypto', label: 'Crypto', buttonLabel: 'Pagar con crypto', icon: Bitcoin },
 ] as const
 
-/** Solo los métodos que el backend sabe firmar. */
-type MethodId = 'card' | 'bank'
+type MethodId = (typeof METHODS)[number]['id']
+
+/** Los que firma el backend de Wompi. */
+type WompiMethodId = 'card' | 'bank'
 
 type CheckoutSession = {
   publicKey: string
@@ -115,11 +119,14 @@ const ERROR_BY_STATUS: Record<string, string> = {
 export function WompiCheckout({
   amountInCents,
   thankYouUrl,
+  cryptoEnabled = false,
 }: {
   amountInCents: number
   thankYouUrl: string
+  cryptoEnabled?: boolean
 }) {
   const [method, setMethod] = useState<MethodId>('card')
+  const [redirecting, setRedirecting] = useState(false)
   const [session, setSession] = useState<CheckoutSession | null>(null)
   const [widgetReady, setWidgetReady] = useState(false)
   const [loadAttempt, setLoadAttempt] = useState(0)
@@ -128,7 +135,7 @@ export function WompiCheckout({
   const requestId = useRef(0)
 
   const fetchSession = useCallback(
-    async (methodId: MethodId, signal?: AbortSignal) => {
+    async (methodId: WompiMethodId, signal?: AbortSignal) => {
       const id = ++requestId.current
       const response = await fetch('/api/checkout', {
         method: 'POST',
@@ -161,6 +168,7 @@ export function WompiCheckout({
   // Pide una sesión nueva cada vez que cambia el método, para que la firma
   // corresponda siempre al método que se va a abrir.
   useEffect(() => {
+    if (method === 'crypto') return
     const controller = new AbortController()
     setSession(null)
     fetchSession(method, controller.signal).catch((cause) => {
@@ -171,7 +179,29 @@ export function WompiCheckout({
     return () => controller.abort()
   }, [method, fetchSession])
 
-  function handlePay() {
+  /**
+   * Cripto va por NOWPayments: el backend crea la factura y aquí solo se
+   * redirige a su checkout alojado. No hay modal ni callback como en Wompi.
+   */
+  async function handleCryptoPay() {
+    setError(null)
+    setRedirecting(true)
+    try {
+      const response = await fetch('/api/crypto/checkout', { method: 'POST' })
+      if (!response.ok) throw new Error(`El backend respondió ${response.status}`)
+      const { invoiceUrl } = (await response.json()) as { invoiceUrl: string }
+      window.location.assign(invoiceUrl)
+    } catch (cause) {
+      console.error('[nowpayments] No se pudo iniciar el pago:', cause)
+      setError('No pudimos iniciar el pago en cripto. Inténtalo de nuevo en un momento.')
+      setRedirecting(false)
+    }
+  }
+
+  function handleWompiPay() {
+    // Se fija el método aquí: el callback llega después y para entonces el
+    // usuario pudo haber cambiado de opción.
+    const wompiMethod = method === 'crypto' ? 'card' : method
     if (!session) return
     // El script pudo cargar "bien" y aun así no dejar el widget disponible.
     if (!window.WidgetCheckout) {
@@ -209,14 +239,15 @@ export function WompiCheckout({
         setError(ERROR_BY_STATUS[status] ?? 'El pago no se pudo completar. Inténtalo de nuevo.')
       }
 
-      fetchSession(method).catch(() => {
+      fetchSession(wompiMethod).catch(() => {
         setError('No pudimos preparar un nuevo intento. Recarga la página.')
       })
     })
   }
 
   const selected = METHODS.find((m) => m.id === method) ?? METHODS[0]
-  const disabled = !session || !widgetReady
+  const isCrypto = method === 'crypto'
+  const disabled = isCrypto ? redirecting : !session || !widgetReady
 
   return (
     <>
@@ -227,7 +258,8 @@ export function WompiCheckout({
           aria-label="Método de pago"
           className="grid grid-cols-1 gap-3 sm:grid-cols-3"
         >
-          {METHODS.map(({ id, label, icon: Icon, soon }) => {
+          {METHODS.map(({ id, label, icon: Icon }) => {
+            const soon = id === 'crypto' && !cryptoEnabled
             const isSelected = !soon && id === method
             return (
               <button
@@ -236,7 +268,7 @@ export function WompiCheckout({
                 role="radio"
                 aria-checked={isSelected}
                 disabled={soon}
-                onClick={() => !soon && setMethod(id as MethodId)}
+                onClick={() => !soon && setMethod(id)}
                 className={`flex items-center gap-2.5 rounded-lg border px-4 py-3 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-card ${
                   soon
                     ? 'cursor-not-allowed border-border bg-background opacity-60'
@@ -263,14 +295,14 @@ export function WompiCheckout({
 
       <button
         type="button"
-        onClick={handlePay}
+        onClick={isCrypto ? handleCryptoPay : handleWompiPay}
         disabled={disabled}
         className="flex w-full items-center justify-center gap-2 rounded-xl bg-primary px-6 py-4 text-base font-semibold text-primary-foreground shadow-sm transition-colors hover:bg-primary-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-card disabled:cursor-not-allowed disabled:opacity-60"
       >
         {disabled && !error ? (
           <>
             <Loader2 className="size-4 animate-spin" aria-hidden="true" />
-            Preparando el pago seguro…
+            {isCrypto ? 'Abriendo el checkout…' : 'Preparando el pago seguro…'}
           </>
         ) : (
           selected.buttonLabel
